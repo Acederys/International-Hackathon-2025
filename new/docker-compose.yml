@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  detecot_tools:
+    build: .
+    container_name: detecot_tools
+    ports:
+      - "8000:8000"
+      - "8501:8501"
+    volumes:
+      - D:/hakaton/new/uploads:/app/uploads  # если нужны результаты вне контейнера
