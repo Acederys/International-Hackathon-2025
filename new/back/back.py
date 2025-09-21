@@ -2,12 +2,11 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 from pathlib import Path
-import shutil
 import uuid
 
-app = FastAPI(title="YOLOv8 Classification API")
+app = FastAPI(title="YOLOv8 Object Detection API")
 
-# разрешаем доступ с любых источников (для Streamlit)
+# Разрешаем доступ с любых источников
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,29 +14,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# загружаем модель
-model_path = r"ml/best.pt"
+# Загружаем модель
+model_path = "ml/best.pt"
 model = YOLO(model_path)
 
-# временная папка для загруженных изображений
+# Папка для временных файлов
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    # сохраняем файл
-    ext = Path(file.filename).suffix
+    ext = Path(file.filename).suffix or ".jpg"  # если нет расширения → ставим jpg
     temp_file = UPLOAD_DIR / f"{uuid.uuid4()}{ext}"
-    with temp_file.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+
+    # читаем всё содержимое
+    contents = await file.read()
+    with open(temp_file, "wb") as f:
+        f.write(contents)
 
     # делаем предсказание
-    result = model(temp_file, verbose=False)[0]  # predictions for single image
-    probs = result.probs.data.cpu().numpy()
-    pred_class = int(probs.argmax())
+    results = model(temp_file, verbose=False)
 
-    return {
-        "filename": file.filename,
-        "predicted_class": pred_class,
-        "probabilities": probs.tolist()
-    }
+    detections = []
+    for r in results:
+        for box in r.boxes:
+            detections.append({
+                "class": int(box.cls),
+                "confidence": float(box.conf),
+                "box": box.xyxy[0].tolist()
+            })
+
+    return {"filename": file.filename, "detections": detections}
