@@ -1,9 +1,10 @@
+
 import torch
 import torchvision.transforms as T
 from torchvision import models
 from torch import nn
 from PIL import Image
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 from pathlib import Path
@@ -25,10 +26,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# === YOLO ===
 model_yolo = YOLO(str(Path(__file__).parent.parent / "ml" / "best2.pt"))
 
-# OCR
+# === OCR ===
 reader = easyocr.Reader(['ru', 'en'])
 pattern = re.compile(r'^[A-ZА-Я]{2}-\d{6}-(?:[1-9]|[1-4][0-9]|50)$')
 
@@ -50,7 +51,7 @@ REFERENCE_TOOLS = {
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-# Аномалия 
+# === Аномалия (ResNet18) ===
 device = "cuda" if torch.cuda.is_available() else "cpu"
 anomaly_model_path = Path(__file__).parent.parent / "ml" / "model_resnet18.pth"
 
@@ -68,7 +69,7 @@ transform = T.Compose([
                 std=[0.229, 0.224, 0.225])
 ])
 
-# Вспомогательные функции 
+# === Вспомогательные функции ===
 def rotate_image(img, angle):
     (h, w) = img.shape[:2]
     center = (w // 2, h // 2)
@@ -99,9 +100,14 @@ def predict_anomaly(img_cv2):
         label = pred.argmax(1).item()
     return label  # 0=normal, 1=anomaly
 
-#  API 
+# === API ===
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(
+    file: UploadFile = File(...),
+    run_yolo: bool = Query(True, description="Запустить YOLO детекцию"),
+    run_ocr: bool = Query(False, description="Запустить OCR"),
+    run_anomaly: bool = Query(False, description="Запустить аномалию")
+):
     ext = Path(file.filename).suffix or ".jpg"
     temp_file = UPLOAD_DIR / f"{uuid.uuid4()}{ext}"
 
@@ -110,53 +116,66 @@ async def predict(file: UploadFile = File(...)):
         f.write(contents)
 
     img = cv2.imread(str(temp_file))
-    results = model_yolo(temp_file, verbose=False)
 
     detections = []
-    class_counts = Counter()
-    for r in results:
-        for i, box in enumerate(r.boxes):
-            cls_id = int(box.cls)
-            cls_name = model_yolo.names[cls_id]
-            conf = float(box.conf)
-            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-            crop_img = img[y1:y2, x1:x2]
-            match = ocr_until_match(crop_img)
-            class_counts[cls_name] += 1
-            detections.append({
-                "class": cls_name,
-                "confidence": conf,
-                "box": [x1, y1, x2, y2],
-                "ocr_text": match["text"] if match else None,
-                "ocr_confidence": match["confidence"] if match else None,
-                "ocr_angle": match["angle"] if match else None
-            })
-
     completeness = {}
-    for tool_id, tool_info in REFERENCE_TOOLS.items():
-        name = tool_info["name"]
-        expected_count = tool_info["expected_count"]
-        detected_count = class_counts.get(tool_id, 0)
-        if detected_count == expected_count:
-            completeness[name] = "ok"
-        elif detected_count < expected_count:
-            completeness[name] = f"missing {expected_count - detected_count}"
-        else:
-            completeness[name] = f"extra {detected_count - expected_count}"
+    anomaly_label, anomaly_text = None, None
+    img_b64 = None
 
-    anomaly_label = predict_anomaly(img)
-    anomaly_text = "Аномалия обнаружена!" if anomaly_label == 1 else "Все в порядке"
+    # YOLO + OCR
+    if run_yolo:
+        results = model_yolo(temp_file, verbose=False)
+        class_counts = Counter()
 
-    annotated_img = results[0].plot()
-    _, buffer = cv2.imencode('.jpg', annotated_img)
-    img_b64 = base64.b64encode(buffer).decode('utf-8')
+        for r in results:
+            for box in r.boxes:
+                cls_id = int(box.cls)
+                cls_name = model_yolo.names[cls_id]
+                conf = float(box.conf)
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+
+                crop_img = img[y1:y2, x1:x2]
+                match = None
+                if run_ocr:
+                    match = ocr_until_match(crop_img)
+
+                class_counts[cls_name] += 1
+                detections.append({
+                    "class": cls_name,
+                    "confidence": conf,
+                    "box": [x1, y1, x2, y2],
+                    "ocr_text": match["text"] if match else None,
+                    "ocr_confidence": match["confidence"] if match else None,
+                    "ocr_angle": match["angle"] if match else None
+                })
+
+        # Комплектность
+        for tool_id, tool_info in REFERENCE_TOOLS.items():
+            name = tool_info["name"]
+            expected_count = tool_info["expected_count"]
+            detected_count = class_counts.get(tool_id, 0)
+            if detected_count == expected_count:
+                completeness[name] = "ok"
+            elif detected_count < expected_count:
+                completeness[name] = f"missing {expected_count - detected_count}"
+            else:
+                completeness[name] = f"extra {detected_count - expected_count}"
+
+        # Аннотированное изображение
+        annotated_img = results[0].plot()
+        _, buffer = cv2.imencode('.jpg', annotated_img)
+        img_b64 = base64.b64encode(buffer).decode('utf-8')
+
+    # Аномалия
+    if run_anomaly:
+        anomaly_label = predict_anomaly(img)
+        anomaly_text = "Аномалия обнаружена!" if anomaly_label == 1 else "Все в порядке"
 
     return JSONResponse({
         "filename": file.filename,
-        "detections": detections,
-        "completeness": completeness,
-        "anomaly": anomaly_label,
-        "anomaly_text": anomaly_text,
-        "annotated_image": img_b64
+        "detections": detections if run_yolo else None,
+        "completeness": completeness if run_yolo else None,
+        "anomaly": anomaly_label if run_anomaly else None,
+        "anomaly_text": anomaly_text if run_anomaly else None,
+        "annotated_image": img_b64 if run_yolo else None
     })
-
