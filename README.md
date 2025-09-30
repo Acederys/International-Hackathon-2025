@@ -1,4 +1,4 @@
-# YOLOv8 Tools + Anomaly Detection Demo
+# YOLOv11-seg Tools + Anomaly Detection Demo
 
 Это демонстрационный сервис для анализа комплектности инструментов и выявления аномалий на изображениях с помощью YOLOv8 и ResNet18. Сервис состоит из:
 
