@@ -15,6 +15,8 @@ import easyocr
 import re
 import base64
 from fastapi.responses import JSONResponse
+from typing import List
+import json
 
 app = FastAPI(title="YOLOv8 Tools + Anomaly Detection API")
 
@@ -99,14 +101,7 @@ def predict_anomaly(img_cv2):
         label = pred.argmax(1).item()
     return label  # 0=normal, 1=anomaly
 
-# === API ===
-@app.post("/predict")
-async def predict(
-    file: UploadFile = File(...),
-    run_yolo: bool = Query(True, description="Запустить YOLO детекцию"),
-    run_ocr: bool = Query(False, description="Запустить OCR"),
-    run_anomaly: bool = Query(False, description="Запустить аномалию")
-):
+async def process_file(file: UploadFile, run_yolo: bool, run_ocr: bool, run_anomaly: bool):
     ext = Path(file.filename).suffix or ".jpg"
     temp_file = UPLOAD_DIR / f"{uuid.uuid4()}{ext}"
 
@@ -186,7 +181,7 @@ async def predict(
         anomaly_label = predict_anomaly(img)
         anomaly_text = "Аномалия обнаружена!" if anomaly_label == 1 else "Все в порядке"
 
-    return JSONResponse({
+    return {
         "filename": file.filename,
         "detections": detections if run_yolo else None,
         "completeness": completeness if run_yolo else None,
@@ -194,4 +189,27 @@ async def predict(
         "anomaly": anomaly_label if run_anomaly else None,
         "anomaly_text": anomaly_text if run_anomaly else None,
         "annotated_image": img_b64 if run_yolo else None
-    })
+    }
+
+@app.post("/predict")
+async def predict(
+    file: UploadFile = File(...),
+    run_yolo: bool = Query(True),
+    run_ocr: bool = Query(False),
+    run_anomaly: bool = Query(False)
+):
+    result = await process_file(file, run_yolo, run_ocr, run_anomaly)
+    return JSONResponse(result)
+
+@app.post("/predict_batch")
+async def predict_batch(
+    files: List[UploadFile] = File(...),
+    run_yolo: bool = Query(True),
+    run_ocr: bool = Query(False),
+    run_anomaly: bool = Query(False)
+):
+    results = []
+    for file in files:
+        res = await process_file(file, run_yolo, run_ocr, run_anomaly)
+        results.append(res)
+    return JSONResponse(results)
