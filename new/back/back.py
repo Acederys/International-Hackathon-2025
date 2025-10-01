@@ -1,4 +1,3 @@
-
 import torch
 import torchvision.transforms as T
 from torchvision import models
@@ -121,6 +120,7 @@ async def predict(
     completeness = {}
     anomaly_label, anomaly_text = None, None
     img_b64 = None
+    stats = None
 
     # YOLO + OCR
     if run_yolo:
@@ -161,6 +161,21 @@ async def predict(
             else:
                 completeness[name] = f"extra {detected_count - expected_count}"
 
+        # Итоговая статистика
+        total_found = sum(class_counts.values())
+        total_missing = 0
+        for tool_id, tool_info in REFERENCE_TOOLS.items():
+            expected_count = tool_info["expected_count"]
+            detected_count = class_counts.get(tool_id, 0)
+            if detected_count < expected_count:
+                total_missing += (expected_count - detected_count)
+
+        stats = {
+            "total_found": total_found,
+            "total_missing": total_missing,
+            "expected_total": sum(t["expected_count"] for t in REFERENCE_TOOLS.values())
+        }
+
         # Аннотированное изображение
         annotated_img = results[0].plot()
         _, buffer = cv2.imencode('.jpg', annotated_img)
@@ -175,6 +190,7 @@ async def predict(
         "filename": file.filename,
         "detections": detections if run_yolo else None,
         "completeness": completeness if run_yolo else None,
+        "stats": stats if run_yolo else None,
         "anomaly": anomaly_label if run_anomaly else None,
         "anomaly_text": anomaly_text if run_anomaly else None,
         "annotated_image": img_b64 if run_yolo else None
