@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from typing import List
 import json
 
-app = FastAPI(title="YOLOv8 Tools + Anomaly Detection API")
+app = FastAPI(title="YOLOv11 Tools + Anomaly Detection API")
 
 app.add_middleware(
     CORSMiddleware,
