@@ -26,7 +26,7 @@ RUN mkdir -p /root/.cache/ultralytics
 # копируем свои веса
 COPY ml/best2.pt /app/ml/best2.pt
 # копируем дефолтные yolov8n.pt чтобы Ultralytics не качал
-COPY ml/yolov8n.pt /root/.cache/ultralytics/yolov8n.pt
+# COPY ml/yolov8n.pt /root/.cache/ultralytics/yolov8n.pt
 
 # Теперь копируем весь проект
 COPY . .
